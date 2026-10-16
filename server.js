@@ -11,11 +11,28 @@ const MODELS = {
   default: process.env.MODEL_DEFAULT || 'gemini-flash-latest'
 };
 MODELS.complex = process.env.MODEL_DEEP || MODELS.default;
-const PER_MIN = Number(process.env.RATE_PER_MIN) || 10;      // messages per visitor per minute
-const PER_DAY = Number(process.env.RATE_PER_DAY) || 100;     // messages per visitor per day
+const PER_MIN = Number(process.env.RATE_PER_MIN) || 20;      // messages per visitor per minute
+const PER_DAY = Number(process.env.RATE_PER_DAY) || 200;     // messages per visitor per day
 const GLOBAL_DAY = Number(process.env.GLOBAL_PER_DAY) || 700; // messages for everyone per day
 const MAX_BODY = 4 * 1024 * 1024;
-const HTML = fs.readFileSync(path.join(__dirname, 'index.html'));
+// Small safety patches applied to the page when the server starts. They only act on the
+// older page text, so they do nothing once index.html already contains the fixes.
+function patchHtml(src) {
+  const P = [
+    ["list=document.createElement(ord?'ol':'ul');el.appendChild(list)", "list=document.createElement(ord?'ol':'ul');if(ord){const n=parseInt(m[1],10);if(n>1)list.start=n}el.appendChild(list)"],
+    ["let tier='default';", "let tier='quick';"],
+    ["localStorage.getItem('gbot:tier')||'default'", "localStorage.getItem('gbot:tier')||'quick'"],
+    ["if(!TIERS.some(t=>t[0]===tier))tier='default';", "if(!TIERS.some(t=>t[0]===tier))tier='quick';"]
+  ];
+  let n = 0;
+  for (const [a, b] of P) { if (src.includes(a)) { src = src.split(a).join(b); n++; } }
+  console.log('Page patches applied: ' + n);
+  return src;
+}
+const HTML = Buffer.from(patchHtml(fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8')), 'utf8');
+// Last result per speed level, shown on /healthz so problems are easy to diagnose (no secrets).
+const stats = {};
+const note = (k, model, status, ms) => { stats[k] = { model, status, ms, at: new Date().toISOString() }; };
 
 const SYSTEM = "You are GBot 1.0, a cheerful, upbeat and knowledgeable general-purpose AI helper. You are friendly and encouraging, with light, warm humor when it fits, but always clear and accurate. If asked your name, say you are GBot. You were built and are owned by Goody, and you are free to use. If anyone asks who made, built, owns or created you, answer warmly and briefly, for example: I'm GBot, built by Goody. If anyone asks who Goody is, say: Goody built and owns GBot, and I don't have other personal details about them. Never invent facts about Goody. If asked which AI model or technology powers you, be honest that you run on Google's Gemini. Never claim that Google, OpenAI or Anthropic built GBot itself. Use markdown (short paragraphs, lists, bold, code blocks, tables when helpful). Keep answers concise unless asked for detail.";
 const MODES = {
@@ -53,7 +70,12 @@ function limited(ip) {
   if (h.t.length >= PER_MIN || h.n >= PER_DAY) return 'rate_limited';
   h.t.push(now); h.n++; gday++; return null;
 }
-const clientIp = (req) => { const f = String(req.headers['x-forwarded-for'] || '').split(',').map(s => s.trim()).filter(Boolean); return f.length ? f[f.length - 1] : req.socket.remoteAddress || 'unknown'; };
+const clientIp = (req) => {
+  const cf = String(req.headers['cf-connecting-ip'] || '').trim(); if (cf) return cf;       // set by the host's edge network
+  const tc = String(req.headers['true-client-ip'] || '').trim(); if (tc) return tc;
+  const f = String(req.headers['x-forwarded-for'] || '').split(',').map(x => x.trim()).filter(Boolean);
+  return f.length ? f[0] : (req.socket.remoteAddress || 'unknown');
+};
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -102,6 +124,7 @@ async function chat(req, res) {
   }
   const title = b.task === 'title';
   const model = title ? MODELS.quick : (MODELS[b.tier] || MODELS.default);
+  const tkey = title ? 'title' : (MODELS[b.tier] ? b.tier : 'default'), t0 = Date.now();
   const body = { systemInstruction: { parts: [{ text: title ? TITLE_SYSTEM : buildSystem(b.mode, b.prefs) }] }, contents };
   const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 90000);
   res.on('close', () => { if (!res.writableEnded) ac.abort(); });
@@ -109,7 +132,8 @@ async function chat(req, res) {
     const up = await fetch(BASE + '/v1beta/models/' + encodeURIComponent(model) + ':streamGenerateContent?alt=sse', {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': KEY }, body: JSON.stringify(body), signal: ac.signal
     });
-    if (!up.ok) { console.log('upstream status', up.status); try { await up.body.cancel(); } catch (e) {} return send(res, up.status === 429 ? 429 : 502, { error: up.status === 429 ? 'busy' : 'upstream' }); }
+    note(tkey, model, up.status, Date.now() - t0);
+    if (!up.ok) { console.log('upstream status', up.status, model); try { await up.body.cancel(); } catch (e) {} return send(res, up.status === 429 ? 429 : 502, { error: up.status === 429 ? 'busy' : 'upstream' }); }
     res.writeHead(200, hdr({ 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' }));
     const dec = new TextDecoder(); let buf = '', any = false;
     for await (const chunk of up.body) {
@@ -128,6 +152,7 @@ async function chat(req, res) {
     if (!any) res.write("Sorry, I couldn't answer that one. Try rephrasing it.");
     res.end();
   } catch (e) {
+    note(tkey, model, 'error:' + (e && e.name), Date.now() - t0);
     if (!res.headersSent) return send(res, 502, { error: 'upstream' });
     res.end();
   } finally { clearTimeout(timer); }
@@ -138,7 +163,7 @@ const server = http.createServer(async (req, res) => {
     const url = (req.url || '/').split('?')[0];
     if (req.method === 'POST' && url === '/api/chat') return await chat(req, res);
     if (req.method === 'GET' && (url === '/' || url === '/index.html')) { res.writeHead(200, hdr({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })); return res.end(HTML); }
-    if (req.method === 'GET' && url === '/healthz') return send(res, 200, { ok: true, configured: !!KEY });
+    if (req.method === 'GET' && url === '/healthz') return send(res, 200, { ok: true, configured: !!KEY, models: MODELS, last: stats });
     res.writeHead(404, hdr({ 'content-type': 'text/plain' })); res.end('Not found');
   } catch (e) { console.error('error', e.message); if (!res.headersSent) send(res, 500, { error: 'server' }); else res.end(); }
 });
