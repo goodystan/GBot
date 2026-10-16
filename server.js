@@ -22,7 +22,8 @@ function patchHtml(src) {
     ["list=document.createElement(ord?'ol':'ul');el.appendChild(list)", "list=document.createElement(ord?'ol':'ul');if(ord){const n=parseInt(m[1],10);if(n>1)list.start=n}el.appendChild(list)"],
     ["let tier='default';", "let tier='quick';"],
     ["localStorage.getItem('gbot:tier')||'default'", "localStorage.getItem('gbot:tier')||'quick'"],
-    ["if(!TIERS.some(t=>t[0]===tier))tier='default';", "if(!TIERS.some(t=>t[0]===tier))tier='quick';"]
+    ["if(!TIERS.some(t=>t[0]===tier))tier='default';", "if(!TIERS.some(t=>t[0]===tier))tier='quick';"],
+    ["c==='busy'?'GBot is very busy right now. Please try again later.'", "c==='deep_busy'?'Deep thinking has reached its free limit for now. Please try Fast replies or Balanced.':c==='busy'?'GBot is very busy right now. Please try again later.'"]
   ];
   let n = 0;
   for (const [a, b] of P) { if (src.includes(a)) { src = src.split(a).join(b); n++; } }
@@ -133,7 +134,7 @@ async function chat(req, res) {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': KEY }, body: JSON.stringify(body), signal: ac.signal
     });
     note(tkey, model, up.status, Date.now() - t0);
-    if (!up.ok) { console.log('upstream status', up.status, model); try { await up.body.cancel(); } catch (e) {} return send(res, up.status === 429 ? 429 : 502, { error: up.status === 429 ? 'busy' : 'upstream' }); }
+    if (!up.ok) { console.log('upstream status', up.status, model); try { await up.body.cancel(); } catch (e) {} return send(res, up.status === 429 ? 429 : 502, { error: up.status === 429 ? (tkey === 'complex' ? 'deep_busy' : 'busy') : 'upstream' }); }
     res.writeHead(200, hdr({ 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' }));
     const dec = new TextDecoder(); let buf = '', any = false;
     for await (const chunk of up.body) {
