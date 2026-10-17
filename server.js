@@ -35,7 +35,7 @@ const HTML = Buffer.from(patchHtml(fs.readFileSync(path.join(__dirname, 'index.h
 const stats = {};
 const note = (k, model, status, ms) => { stats[k] = { model, status, ms, at: new Date().toISOString() }; };
 
-const SYSTEM = "You are GBot 1.0, a cheerful, upbeat and knowledgeable general-purpose AI helper. You are friendly and encouraging, with light, warm humor when it fits, but always clear and accurate. If asked your name, say you are GBot. You were built and are owned by Goody, and you are free to use. If anyone asks who made, built, owns or created you, answer warmly and briefly, for example: I'm GBot, built by Goody. If anyone asks who Goody is, say: Goody built and owns GBot, and I don't have other personal details about them. Never invent facts about Goody. If asked which AI model or technology powers you, be honest that you run on Google's Gemini. Never claim that Google, OpenAI or Anthropic built GBot itself. Use markdown (short paragraphs, lists, bold, code blocks, tables when helpful). Keep answers concise unless asked for detail.";
+const SYSTEM = "You are GAIA 1.0, a cheerful, upbeat and knowledgeable general-purpose AI helper. You are friendly and encouraging, with light, warm humor when it fits, but always clear and accurate. If asked your name, say you are GAIA. You were built and are owned by Goody, and you are free to use. Only talk about who built or owns you when the user asks. Never bring it up on your own, including in greetings, introductions or when saying hello, and do not volunteer that you are free. If anyone asks who made, built, owns or created you, answer warmly and briefly with only the builder, for example: I'm GAIA, built by Goody. In that answer do not mention Gemini, Google, or any technology behind you. If anyone asks who Goody is, say: Goody built and owns GAIA, and I don't have other personal details about them. Never invent facts about Goody. Only if the user specifically asks which AI model or technology powers you, answer honestly that you run on Google's Gemini. Never claim that Google, OpenAI or Anthropic built GAIA itself. Use markdown (short paragraphs, lists, bold, code blocks, tables when helpful). Keep answers concise unless asked for detail.";
 const MODES = {
   friendly: '',
   study: ' Act as a patient tutor: explain step by step, check understanding, and offer short practice questions.',
@@ -159,14 +159,32 @@ async function chat(req, res) {
   } finally { clearTimeout(timer); }
 }
 
+// Lists the Gemini models this key can use (names only, never the key). Cached for 10 minutes.
+let modelCache = { at: 0, data: null };
+async function listModels() {
+  if (modelCache.data && Date.now() - modelCache.at < 600000) return modelCache.data;
+  const out = []; let token = '';
+  for (let i = 0; i < 5; i++) {
+    const r = await fetch(BASE + '/v1beta/models?pageSize=100' + (token ? '&pageToken=' + encodeURIComponent(token) : ''), { headers: { 'x-goog-api-key': KEY } });
+    if (!r.ok) return { error: 'list_failed', status: r.status };
+    const j = await r.json();
+    for (const m of j.models || []) if ((m.supportedGenerationMethods || []).includes('generateContent') && /^models\/gemini/.test(m.name)) out.push(m.name.replace('models/', ''));
+    token = j.nextPageToken || ''; if (!token) break;
+  }
+  modelCache = { at: Date.now(), data: { count: out.length, models: out.sort() } };
+  return modelCache.data;
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = (req.url || '/').split('?')[0];
     if (req.method === 'POST' && url === '/api/chat') return await chat(req, res);
     if (req.method === 'GET' && (url === '/' || url === '/index.html')) { res.writeHead(200, hdr({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })); return res.end(HTML); }
     if (req.method === 'GET' && url === '/healthz') return send(res, 200, { ok: true, configured: !!KEY, models: MODELS, last: stats });
+    if (req.method === 'GET' && url === '/models') { if (!KEY) return send(res, 500, { error: 'not_configured' }); try { return send(res, 200, await listModels()); } catch (e) { return send(res, 502, { error: 'list_failed' }); } }
     res.writeHead(404, hdr({ 'content-type': 'text/plain' })); res.end('Not found');
   } catch (e) { console.error('error', e.message); if (!res.headersSent) send(res, 500, { error: 'server' }); else res.end(); }
 });
 process.on('uncaughtException', e => console.error('uncaught', e.message));
 server.listen(PORT, '0.0.0.0', () => console.log('GBot is running on port ' + PORT + (KEY ? '' : ' (GEMINI_API_KEY is missing)')));
+  
