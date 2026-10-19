@@ -54,7 +54,7 @@ const SEC = {
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
   'x-frame-options': 'DENY',
-  'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+  'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 };
 const hdr = (o) => Object.assign({}, SEC, o);
 const send = (res, code, obj) => { res.writeHead(code, hdr({ 'content-type': 'application/json', 'cache-control': 'no-store' })); res.end(JSON.stringify(obj)); };
@@ -159,6 +159,66 @@ async function chat(req, res) {
   } finally { clearTimeout(timer); }
 }
 
+// ---- Studio voices (Gemini text-to-speech). Falls back on the phone's voice in the page if unavailable. ----
+const MODEL_TTS = process.env.MODEL_TTS || 'gemini-3.8-flash-lite-tts';
+const TTS_PER_MIN = Number(process.env.TTS_PER_MIN) || 6, TTS_PER_DAY = Number(process.env.TTS_PER_DAY) || 40, TTS_GLOBAL_DAY = Number(process.env.TTS_GLOBAL_PER_DAY) || 250;
+const TTS_VOICES = ['Zephyr','Puck','Charon','Kore','Fenrir','Leda','Orus','Aoede','Callirrhoe','Autonoe','Enceladus','Iapetus','Umbriel','Algieba','Despina','Erinome','Algenib','Rasalgethi','Laomedeia','Achernar','Alnilam','Schedar','Gacrux','Pulcherrima','Achird','Zubenelgenubi','Vindemiatrix','Sadachbia','Sadaltager','Sulafat'];
+const TTS_STYLES = { slow: 'speaking slowly', bright: 'high pitch, cheerful and playful' };
+const ttsHits = new Map(); let ttsDay = new Date().toDateString(), ttsG = 0;
+function ttsLimited(ip) {
+  const now = Date.now(), d = new Date().toDateString();
+  if (d !== ttsDay) { ttsDay = d; ttsHits.clear(); ttsG = 0; }
+  if (ttsHits.size > 50000) ttsHits.clear();
+  if (ttsG >= TTS_GLOBAL_DAY) return 'busy';
+  let h = ttsHits.get(ip); if (!h) { h = { t: [], n: 0 }; ttsHits.set(ip, h); }
+  h.t = h.t.filter(x => now - x < 60000);
+  if (h.t.length >= TTS_PER_MIN || h.n >= TTS_PER_DAY) return 'rate_limited';
+  h.t.push(now); h.n++; ttsG++; return null;
+}
+function findAudio(o) {
+  if (!o || typeof o !== 'object') return null;
+  if (o.type === 'audio' && typeof o.data === 'string') return o;
+  let r = null;
+  for (const k of Object.keys(o)) { const v = o[k]; const f = Array.isArray(v) ? v.reduce((a, x) => findAudio(x) || a, null) : findAudio(v); if (f) r = f; }
+  return r;
+}
+function wavFromPcm(buf, rate) {
+  const h = Buffer.alloc(44); h.write('RIFF', 0); h.writeUInt32LE(36 + buf.length, 4); h.write('WAVE', 8); h.write('fmt ', 12);
+  h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22); h.writeUInt32LE(rate, 24); h.writeUInt32LE(rate * 2, 28);
+  h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34); h.write('data', 36); h.writeUInt32LE(buf.length, 40);
+  return Buffer.concat([h, buf]);
+}
+async function tts(req, res) {
+  const origin = req.headers.origin;
+  if (origin) { try { if (new URL(origin).host !== req.headers.host) return send(res, 403, { error: 'forbidden' }); } catch (e) { return send(res, 403, { error: 'forbidden' }); } }
+  if (!KEY) return send(res, 500, { error: 'not_configured' });
+  if (String(req.headers['content-type'] || '').indexOf('application/json') !== 0) return send(res, 415, { error: 'bad_request' });
+  if (Number(req.headers['content-length'] || 0) > 20000) return send(res, 413, { error: 'too_large' });
+  const lim = ttsLimited(clientIp(req)); if (lim) return send(res, 429, { error: lim });
+  let b; try { b = JSON.parse(await readBody(req)); } catch (e) { return send(res, 400, { error: 'bad_request' }); }
+  const text = clip(b && b.text, 900).trim();
+  if (!text || !TTS_VOICES.includes(b.voice) || (b.style && !TTS_STYLES[b.style])) return send(res, 400, { error: 'bad_request' });
+  const content = { type: 'text', text };
+  if (b.style) content.annotations = [{ type: 'speech_metadata', style: TTS_STYLES[b.style] }];
+  const body = { model: MODEL_TTS, input: [{ type: 'user_input', content: [content] }], response_format: { type: 'audio' }, generation_config: { speech_config: [{ voice: b.voice }] } };
+  const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 60000), t0 = Date.now();
+  res.on('close', () => { if (!res.writableEnded) ac.abort(); });
+  try {
+    const up = await fetch(BASE + '/v1beta/interactions', { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': KEY }, body: JSON.stringify(body), signal: ac.signal });
+    note('tts', MODEL_TTS, up.status, Date.now() - t0);
+    if (!up.ok) { console.log('tts upstream status', up.status, MODEL_TTS); return send(res, up.status === 429 ? 429 : 502, { error: up.status === 429 ? 'busy' : 'upstream' }); }
+    const a = findAudio(await up.json());
+    if (!a) return send(res, 502, { error: 'no_audio' });
+    let buf = Buffer.from(a.data, 'base64');
+    if (buf.slice(0, 4).toString() !== 'RIFF') buf = wavFromPcm(buf, 24000);
+    res.writeHead(200, hdr({ 'content-type': 'audio/wav', 'cache-control': 'no-store' })); res.end(buf);
+  } catch (e) {
+    note('tts', MODEL_TTS, 'error:' + (e && e.name), Date.now() - t0);
+    if (!res.headersSent) return send(res, 502, { error: 'upstream' });
+    res.end();
+  } finally { clearTimeout(timer); }
+}
+
 // Lists the Gemini models this key can use (names only, never the key). Cached for 10 minutes.
 let modelCache = { at: 0, data: null };
 async function listModels() {
@@ -179,6 +239,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = (req.url || '/').split('?')[0];
     if (req.method === 'POST' && url === '/api/chat') return await chat(req, res);
+    if (req.method === 'POST' && url === '/api/tts') return await tts(req, res);
     if (req.method === 'GET' && (url === '/' || url === '/index.html')) { res.writeHead(200, hdr({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })); return res.end(HTML); }
     if (req.method === 'GET' && url === '/healthz') return send(res, 200, { ok: true, configured: !!KEY, models: MODELS, last: stats });
     if (req.method === 'GET' && url === '/models') { if (!KEY) return send(res, 500, { error: 'not_configured' }); try { return send(res, 200, await listModels()); } catch (e) { return send(res, 502, { error: 'list_failed' }); } }
