@@ -229,6 +229,18 @@ button:focus-visible,.item:focus-visible{outline:2px solid var(--accent);outline
 :root[data-acc="black"] .newbtn,:root[data-acc="black"] #send,:root[data-acc="black"] .dyes,:root[data-acc="black"] .padd button,:root[data-acc="black"] .vrow button,:root[data-acc="white"] .newbtn,:root[data-acc="white"] #send,:root[data-acc="white"] .dyes,:root[data-acc="white"] .padd button,:root[data-acc="white"] .vrow button{box-shadow:0 0 0 1px rgba(128,140,155,.5)}
 :root[data-acc="white"] .sbody input[type=checkbox]:checked::after{background:#334155}
 @media (max-width:760px){.top .newtop{padding:8px 10px}.jump{right:0}}
+
+/* ===== speaking speed slider (follows the accent colour) ===== */
+.sbody .vs input[type=range]{-webkit-appearance:none;appearance:none;display:block;width:100%;height:4px;padding:0;border:0;border-radius:999px;margin:16px 0 8px;outline:none;background:linear-gradient(to right,var(--accent) var(--pct,50%),var(--line) var(--pct,50%))}
+.sbody .vs input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:26px;height:26px;border-radius:50%;background:var(--accent);border:0;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+.sbody .vs input[type=range]::-moz-range-thumb{width:26px;height:26px;border-radius:50%;background:var(--accent);border:0;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+.sbody .vs input[type=range]::-moz-range-track{height:4px;border-radius:999px;background:var(--line)}
+.sbody .vs input[type=range]::-moz-range-progress{height:4px;border-radius:999px;background:var(--accent)}
+.sbody .vs input[type=range]:focus-visible::-webkit-slider-thumb{outline:2px solid var(--accent);outline-offset:3px}
+.vs-ends{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--dim)}.vs-ends b{color:var(--text);font-weight:600}
+.vbtns{display:flex;gap:12px;justify-content:center;margin-top:14px}
+.vbtns button{flex:0 1 150px;height:44px;border-radius:999px;border:0;background:var(--grad);color:var(--ongrad,#fff);font-weight:700;letter-spacing:.05em;text-transform:uppercase;font-size:14px}
+:root[data-acc="black"] .vbtns button,:root[data-acc="white"] .vbtns button{box-shadow:0 0 0 1px rgba(128,140,155,.5)}
 </style>
 </head>
 <body>
@@ -258,10 +270,8 @@ button:focus-visible,.item:focus-visible{outline:2px solid var(--accent);outline
 <h4>Chat</h4>
 <label class="sw"><span>Press Enter to send</span><input type="checkbox" id="s_enter"></label>
 <label class="sw"><span>Read replies aloud automatically</span><input type="checkbox" id="s_tts"></label>
-<div class="fl">Voice engine<select id="s_engine"><option value="studio">Studio voices (online, more natural)</option><option value="phone">Phone voice (works offline)</option></select><span class="sn2">Studio voices are natural Google voices. If they are not available, GAIA uses your phone voice instead.</span></div>
-<div class="fl">Read-aloud voice style<div class="vrow"><select id="s_voice"><option value="male">Male</option><option value="female">Female</option><option value="young">Young</option><option value="old">Old</option><option value="child">Child</option><option value="auto">Device default</option></select><button type="button" id="s_vprev">Preview</button></div></div>
-<div class="fl">Studio voice<select id="s_svoice"><option value="">Automatic (from the style above)</option></select><span class="sn2">Pick a specific studio voice, or leave Automatic. Male, Female, Young, Old and Child choose a matching studio voice for you.</span></div>
-<div class="fl">Phone voice<select id="s_vname"><option value="">Automatic</option></select><span class="sn2">Pick a specific voice installed on your phone. Male, Young, Old and Child adjust the pitch and speed of that voice, or of the best match when this is on Automatic. For more voices, install them in your phone's text-to-speech settings.</span></div>
+<div class="fl">Read-aloud voice<select id="s_voice"><option value="male">Male</option><option value="female">Female</option><option value="young">Young</option><option value="old">Old</option><option value="auto">Default</option></select></div>
+<div class="fl">Speaking speed<div class="vs"><input type="range" id="s_vspeed" min="0.6" max="1.6" step="0.05" value="1" aria-label="Speaking speed from slow to fast"></div><div class="vs-ends"><span>Slow</span><b id="s_vsv">Normal</b><span>Fast</span></div><div class="vbtns"><button type="button" id="s_vplay">Play</button><button type="button" id="s_vreset">Reset</button></div></div>
 
 <label class="sw"><span>AI-written chat titles</span><input type="checkbox" id="s_autotitle"></label>
 <p class="sn">Shortcuts: Ctrl or Cmd + K starts a new chat, and / jumps to the message box. You can also drag and drop files onto the page.</p>
@@ -496,7 +506,7 @@ function toast(m){const t=document.createElement('div');t.className='toast';t.te
 const plainText=t=>t.replace(/```[\s\S]*?```/g,' code block ').replace(/[*#`>_|]/g,'');
 const FEM=/\bfemale\b|woman|zira|susan|hazel|samantha|karen|moira|tessa|victoria|fiona|serena|allison|joanna|kendra|kimberly|salli|emma|amy|ivy|nicole|olivia|libby|sonia|natasha|aria|jenny|michelle|catherine|heera|lekha|siri/i;
 const MAL=/\bmale\b|\bman\b|david|mark|james|daniel|george|guy|ryan|alex|fred|tom|aaron|arthur|oliver|rishi|ravi|liam|brian|matthew|joey|justin|kevin|russell|geraint|christopher|eric|roger|steffan|thomas/i;
-const VP={male:{p:.55,r:.95,pref:'male'},female:{p:1.15,r:1,pref:'female'},young:{p:1.3,r:1.06,pref:'female'},old:{p:.7,r:.8,pref:'male'},child:{p:1.85,r:1.1,pref:'female'},auto:{p:1,r:1,pref:null}};
+const VP={male:{p:.55,pref:'male'},female:{p:1.15,pref:'female'},young:{p:1.3,pref:'female'},old:{p:.7,pref:'male'},child:{p:1.85,pref:'female'},auto:{p:1,pref:null}};
 function voiceList(){const vs=(window.speechSynthesis&&speechSynthesis.getVoices())||[];const lang=(navigator.language||'en').toLowerCase().slice(0,2);const pool=vs.filter(v=>v.lang&&v.lang.toLowerCase().startsWith(lang));return pool.length?pool:vs}
 const isM=v=>MAL.test(v.name)&&!FEM.test(v.name),isF=v=>FEM.test(v.name);
 function pickVoice(pref){const L=voiceList();if(!L.length||!pref)return null;return (pref==='male'?L.filter(isM):L.filter(isF))[0]||null}
@@ -504,26 +514,25 @@ function phoneSay(text,onend){
   if(!('speechSynthesis' in window)){if(onend)onend();return false}
   try{speechSynthesis.cancel()}catch(e){}
   const st=VP[settings.voice]||VP.male,u=new SpeechSynthesisUtterance(plainText(text));
-  let v=null;if(settings.vname)v=((speechSynthesis.getVoices&&speechSynthesis.getVoices())||[]).find(x=>x.name===settings.vname)||null;
-  if(!v)v=pickVoice(st.pref);
+  const v=pickVoice(st.pref);
   if(v){u.voice=v;u.lang=v.lang}
   const real=!!v&&(st.pref==='male'?isM(v):st.pref==='female'?isF(v):false);
   u.pitch=settings.voice==='male'?(real?0.9:st.p):settings.voice==='female'?(real?1:st.p):st.p;
-  u.rate=st.r;
+  u.rate=settings.vspeed||1;
   if(onend){u.onend=onend;u.onerror=onend}
   speechSynthesis.speak(u);return true;
 }
-const STUDIO={male:['Charon',''],female:['Kore',''],young:['Leda',''],old:['Algenib','slow'],child:['Leda','bright']};
-const SVOICES=[['Zephyr','Bright'],['Puck','Upbeat'],['Charon','Informative'],['Kore','Firm'],['Fenrir','Excitable'],['Leda','Youthful'],['Orus','Firm'],['Aoede','Breezy'],['Callirrhoe','Easy-going'],['Autonoe','Bright'],['Enceladus','Breathy'],['Iapetus','Clear'],['Umbriel','Easy-going'],['Algieba','Smooth'],['Despina','Smooth'],['Erinome','Clear'],['Algenib','Gravelly'],['Rasalgethi','Informative'],['Laomedeia','Upbeat'],['Achernar','Soft'],['Alnilam','Firm'],['Schedar','Even'],['Gacrux','Mature'],['Pulcherrima','Forward'],['Achird','Friendly'],['Zubenelgenubi','Casual'],['Vindemiatrix','Gentle'],['Sadachbia','Lively'],['Sadaltager','Knowledgeable'],['Sulafat','Warm']];
+const WHO=['male','female','young','old','child'];
+let voiceAvail=['male','female','young','old'];
 let audioEl=null,spkTok=0,studioDownUntil=0,spkBtn=null;
 function stopSpeech(){spkTok++;try{if(audioEl){audioEl.pause();audioEl.src=''}}catch(e){}audioEl=null;try{speechSynthesis.cancel()}catch(e){}}
 function splitText(t,n){const out=[];let cur='';(t.replace(/\s+/g,' ').trim().match(/[^.!?]+[.!?]*\s*/g)||[t]).forEach(s=>{s=s.trim();while(s.length>n){if(cur){out.push(cur);cur=''}out.push(s.slice(0,n));s=s.slice(n)}if(!s)return;if((cur+' '+s).trim().length>n){out.push(cur);cur=s}else cur=(cur+' '+s).trim()});if(cur)out.push(cur);return out.filter(Boolean)}
-async function ttsFetch(text,voice,style){const r=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,voice,style})});if(!r.ok)throw new Error('tts '+r.status);return await r.blob()}
+async function ttsFetch(text,who){const r=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,who})});if(!r.ok)throw new Error('tts '+r.status);return await r.blob()}
 async function studioSay(text,onend){
-  const tok=++spkTok,st=STUDIO[settings.voice],voice=settings.svoice||st[0],style=st[1];
+  const tok=++spkTok,who=settings.voice;
   const chunks=splitText(plainText(text),700).slice(0,4);
   if(!chunks.length){if(onend)onend();return}
-  const get=c=>{const p=ttsFetch(c,voice,style);p.catch(()=>{});return p};
+  const get=c=>{const p=ttsFetch(c,who);p.catch(()=>{});return p};
   let next=get(chunks[0]);
   for(let i=0;i<chunks.length;i++){
     let blob;
@@ -534,18 +543,17 @@ async function studioSay(text,onend){
     }
     if(tok!==spkTok)return;
     if(i+1<chunks.length)next=get(chunks[i+1]);
-    await new Promise(res=>{const a=new Audio(URL.createObjectURL(blob));audioEl=a;const done=()=>{try{URL.revokeObjectURL(a.src)}catch(e){}res()};a.onended=done;a.onerror=done;const p=a.play();if(p&&p.catch)p.catch(done)});
+    await new Promise(res=>{const a=new Audio(URL.createObjectURL(blob));audioEl=a;a.playbackRate=settings.vspeed||1;a.preservesPitch=true;a.webkitPreservesPitch=true;const done=()=>{try{URL.revokeObjectURL(a.src)}catch(e){}res()};a.onended=done;a.onerror=done;const p=a.play();if(p&&p.catch)p.catch(done)});
     if(tok!==spkTok)return;
   }
   if(onend)onend();
 }
 function say(text,onend){
-  const studio=settings.engine==='studio'&&!!STUDIO[settings.voice]&&Date.now()>studioDownUntil;
+  const studio=WHO.includes(settings.voice)&&Date.now()>studioDownUntil;
   stopSpeech();
   if(studio){studioSay(text,onend);return true}
   return phoneSay(text,onend);
 }
-function fillVoices(){const sel=$('s_vname');sel.innerHTML='';const o0=document.createElement('option');o0.value='';o0.textContent='Automatic';sel.appendChild(o0);voiceList().slice().sort((a,b)=>a.name.localeCompare(b.name)).forEach(v=>{const o=document.createElement('option');o.value=v.name;o.textContent=v.name+' ('+v.lang+')';sel.appendChild(o)})}
 const resetSpk=b=>{b.innerHTML=ICO.spk;b.title='Read aloud';b.setAttribute('aria-label','Read aloud')};
 function speak(t,b){
   if(spkBtn){const was=spkBtn;stopSpeech();resetSpk(was);spkBtn=null;if(was===b)return}
@@ -594,9 +602,11 @@ function closeDel(){$('delm').hidden=true;delTarget=null}
 function askDeleteFolder(f){delTarget=f;$('dtitle').textContent='Delete this folder?';$('deltxt').textContent='"'+f.name+'" will be removed. Chats inside it are kept and moved out of the folder.';$('delm').hidden=false}
 function startFolderRename(f,nm){const i=document.createElement('input');i.value=f.name;i.maxLength=40;i.style.cssText='flex:1;min-width:0;font:inherit;font-size:13px;background:var(--card);color:var(--text);border:1px solid var(--accent);border-radius:6px;padding:2px 6px';i.onclick=e=>e.stopPropagation();let done=false;const fin=ok=>{if(done)return;done=true;if(ok&&i.value.trim())f.name=i.value.trim();saveF();renderList()};i.onblur=()=>fin(true);i.onkeydown=e=>{if(e.key==='Enter')fin(true);if(e.key==='Escape')fin(false)};nm.replaceWith(i);i.focus();i.select()}
 function doDelete(){const c=delTarget;closeDel();if(!c)return;if(c.msgs===undefined){folders=folders.filter(k=>k!==c);chats.forEach(h=>{if(h.folder===c.id)h.folder=null});save();saveF();renderList();return}if(busy&&c.id===cur&&ctrl)ctrl.abort();chats=chats.filter(k=>k.id!==c.id);if(cur===c.id)cur=null;save();renderList();renderMsgs()}
-const DEF={nick:'',how:'',about:'',length:'normal',lang:'',size:'md',enter:true,tts:false,accent:'default',autotitle:false,voice:'male',vname:'',ucol:'soft',engine:'studio',svoice:''};
+const DEF={nick:'',how:'',about:'',length:'normal',lang:'',size:'md',enter:true,tts:false,accent:'default',autotitle:false,voice:'male',vspeed:1,ucol:'soft'};
 let settings={...DEF};
 try{settings={...DEF,...JSON.parse(localStorage.getItem('gbot:settings')||'{}')}}catch(e){}
+if(!['male','female','young','old','child','auto'].includes(settings.voice))settings.voice='male';
+if(!(settings.vspeed>=0.6&&settings.vspeed<=1.6))settings.vspeed=1;
 const ACC={blue:['#3f7fe8','linear-gradient(135deg,#35c9e6,#3f7fe8)'],purple:['#8a6fe0','linear-gradient(135deg,#6a74e8,#a06be0)'],green:['#16a37f','linear-gradient(135deg,#2dd4a8,#16a37f)'],
  black:{dark:['#dbe2ec','linear-gradient(135deg,#000000,#262b33)','#ffffff'],light:['#111827','linear-gradient(135deg,#000000,#2a2f3a)','#ffffff']},
  white:{dark:['#ffffff','linear-gradient(135deg,#ffffff,#d5dbe3)','#0b0f15'],light:['#334155','linear-gradient(135deg,#ffffff,#d9dfe7)','#0b0f15']}};
@@ -612,8 +622,8 @@ function applySettings(){
 function markUser(){document.querySelectorAll('#s_ucol button').forEach(b=>b.classList.toggle('on',b.dataset.u===(settings.ucol||'soft')))}
 function markSwatch(){document.querySelectorAll('#s_accent button').forEach(b=>b.classList.toggle('on',b.dataset.c===settings.accent))}
 function saveSettings(){try{localStorage.setItem('gbot:settings',JSON.stringify(settings))}catch(e){}applySettings()}
-function fillSettings(){$('s_nick').value=settings.nick;$('s_how').value=settings.how;$('s_about').value=settings.about;$('s_len').value=settings.length;$('s_lang').value=settings.lang;$('s_size').value=settings.size;$('s_enter').checked=settings.enter;$('s_tts').checked=settings.tts;$('s_autotitle').checked=settings.autotitle;fillVoices();$('s_voice').value=settings.voice;$('s_vname').value=settings.vname;$('s_engine').value=settings.engine;$('s_svoice').value=settings.svoice;markUser();markSwatch();drawPrompts()}
-function readSettings(){settings={nick:$('s_nick').value.trim(),how:$('s_how').value.trim(),about:$('s_about').value.trim(),length:$('s_len').value,lang:$('s_lang').value,size:$('s_size').value,enter:$('s_enter').checked,tts:$('s_tts').checked,accent:settings.accent,autotitle:$('s_autotitle').checked,voice:$('s_voice').value,vname:$('s_vname').value,ucol:settings.ucol,engine:$('s_engine').value,svoice:$('s_svoice').value};saveSettings()}
+function fillSettings(){$('s_nick').value=settings.nick;$('s_how').value=settings.how;$('s_about').value=settings.about;$('s_len').value=settings.length;$('s_lang').value=settings.lang;$('s_size').value=settings.size;$('s_enter').checked=settings.enter;$('s_tts').checked=settings.tts;$('s_autotitle').checked=settings.autotitle;$('s_voice').value=settings.voice;$('s_vspeed').value=settings.vspeed;paintSpeed();markUser();markSwatch();drawPrompts()}
+function readSettings(){settings={nick:$('s_nick').value.trim(),how:$('s_how').value.trim(),about:$('s_about').value.trim(),length:$('s_len').value,lang:$('s_lang').value,size:$('s_size').value,enter:$('s_enter').checked,tts:$('s_tts').checked,accent:settings.accent,autotitle:$('s_autotitle').checked,voice:$('s_voice').value,vspeed:parseFloat($('s_vspeed').value)||1,ucol:settings.ucol};saveSettings()}
 async function autoTitle(c){
   if(!settings.autotitle||c.custom||c.titled||c.msgs.length<2)return;c.titled=true;
   try{
@@ -665,13 +675,12 @@ $('delno').onclick=closeDel;$('delyes').onclick=doDelete;$('delm').onclick=e=>{i
 $('phead').onclick=()=>{const o=$('pbody').hidden;$('pbody').hidden=!o;$('phead').setAttribute('aria-expanded',o);$('phead').classList.toggle('open',o);try{localStorage.setItem('gbot:pref',o?'1':'0')}catch(e){}};
 try{if(localStorage.getItem('gbot:pref')==='1')$('phead').click()}catch(e){}
 $('gear').onclick=()=>{fillSettings();$('setm').hidden=false;closeSide()};
-['s_nick','s_how','s_about','s_len','s_lang','s_size','s_enter','s_tts','s_autotitle','s_voice','s_vname','s_engine','s_svoice'].forEach(id=>{$(id).addEventListener('input',readSettings);$(id).addEventListener('change',readSettings)});
+['s_nick','s_how','s_about','s_len','s_lang','s_size','s_enter','s_tts','s_autotitle','s_voice','s_vspeed'].forEach(id=>{$(id).addEventListener('input',readSettings);$(id).addEventListener('change',readSettings)});
 $('s_done').onclick=$('setx').onclick=()=>{$('setm').hidden=true};
 $('s_reset').onclick=()=>{settings={...DEF};saveSettings();fillSettings()};
 $('setm').onclick=e=>{if(e.target===$('setm'))$('setm').hidden=true};
 document.addEventListener('keydown',e=>{if(e.key==='Escape')$('setm').hidden=true});
 document.querySelectorAll('#s_ucol button').forEach(b=>b.onclick=()=>{settings.ucol=b.dataset.u;saveSettings();markUser()});
-if('speechSynthesis' in window){try{speechSynthesis.onvoiceschanged=()=>{fillVoices();$('s_vname').value=settings.vname}}catch(e){}}
 document.querySelectorAll('#s_accent button').forEach(b=>b.onclick=()=>{settings.accent=b.dataset.c;saveSettings();markSwatch()});
 document.addEventListener('keydown',e=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('new').click()}
@@ -699,8 +708,12 @@ speedLabel();$('tier').addEventListener('change',speedLabel);
 $('speed').onclick=e=>{e.stopPropagation();closeCM();cm=document.createElement('div');cm.className='cmenu';
   TIERS.forEach(([k,l])=>{const b=document.createElement('button');b.type='button';b.textContent=l;if(k===tier)b.className='sel';b.onclick=ev=>{ev.stopPropagation();closeCM();tier=k;$('tier').value=k;try{localStorage.setItem('gbot:tier',k)}catch(x){}speedLabel()};cm.appendChild(b)});
   document.body.appendChild(cm);const r=$('speed').getBoundingClientRect();cm.style.top=(r.bottom+6)+'px';cm.style.left=Math.max(8,Math.min(r.left,innerWidth-cm.offsetWidth-8))+'px'};
-SVOICES.forEach(([n,d])=>{const o=document.createElement('option');o.value=n;o.textContent=n+' ('+d.toLowerCase()+')';$('s_svoice').appendChild(o)});
-$('s_vprev').onclick=()=>{say("Hi, I'm GAIA. This is how I sound.")};
+function paintSpeed(){const r=$('s_vspeed'),v=parseFloat(r.value)||1;r.style.setProperty('--pct',((v-0.6)/1.0*100)+'%');$('s_vsv').textContent=Math.abs(v-1)<0.01?'Normal':(+v.toFixed(2))+'×'}
+$('s_vspeed').addEventListener('input',paintSpeed);
+function buildVoiceSelect(){const s=$('s_voice'),cur=settings.voice;s.innerHTML='';[['male','Male'],['female','Female'],['young','Young'],['old','Old']].concat(voiceAvail.includes('child')?[['child','Child']]:[]).concat([['auto','Default']]).forEach(([v,l])=>{const o=document.createElement('option');o.value=v;o.textContent=l;s.appendChild(o)});s.value=cur}
+fetch('/api/voices').then(r=>r.ok?r.json():null).then(j=>{if(j&&Array.isArray(j.available))voiceAvail=j.available.filter(k=>WHO.includes(k));if(!voiceAvail.includes('child')&&settings.voice==='child'){settings.voice='male';saveSettings()}buildVoiceSelect()}).catch(()=>{if(settings.voice==='child'){settings.voice='male';saveSettings()}buildVoiceSelect()});
+$('s_vplay').onclick=()=>{say("Hi, I'm GAIA. This is how I sound.")};
+$('s_vreset').onclick=()=>{$('s_vspeed').value=1;paintSpeed();readSettings()};
 if('speechSynthesis' in window){try{speechSynthesis.getVoices()}catch(e){}}
 document.addEventListener('pointerdown',e=>{
   const el=e.target.closest&&e.target.closest('button,.item,.fhead');
