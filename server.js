@@ -160,15 +160,10 @@ async function chat(req, res) {
 }
 
 // ---- Studio voices (Gemini text-to-speech). Falls back on the phone's voice in the page if unavailable. ----
-// Voices are picked from Google's own voice catalog (GET /v1beta/voices) using its labels: gender, pitch and the
-// description text. The catalog has no age field, so Young / Old / Child are matched on the description wording.
-// Child is offered only when the catalog really contains a voice described as a child.
 const MODEL_TTS = process.env.MODEL_TTS || 'gemini-3.8-flash-lite-tts';
 const TTS_PER_MIN = Number(process.env.TTS_PER_MIN) || 6, TTS_PER_DAY = Number(process.env.TTS_PER_DAY) || 40, TTS_GLOBAL_DAY = Number(process.env.TTS_GLOBAL_PER_DAY) || 250;
-const WHO = ['male', 'female', 'young', 'old', 'child'];
-const PREFER = { male: ['Charon', 'Orus', 'Fenrir', 'Iapetus'], female: ['Kore', 'Aoede', 'Sulafat', 'Callirrhoe'], young: ['Leda', 'Puck', 'Sadachbia'], old: ['Algenib', 'Gacrux', 'Rasalgethi'], child: [] };
-const BUILTIN = { male: 'Charon', female: 'Kore', young: 'Leda', old: 'Algenib' };
-const KW_CHILD = /\b(child|children|kid|boy|girl|toddler|little|infant)\b/i, KW_YOUNG = /\b(young|youthful|youth|teen|teenage)\b/i, KW_OLD = /\b(old|elder|elderly|mature|aged|senior|grandfather|grandmother|seasoned)\b|gravel/i;
+const TTS_VOICES = ['Zephyr','Puck','Charon','Kore','Fenrir','Leda','Orus','Aoede','Callirrhoe','Autonoe','Enceladus','Iapetus','Umbriel','Algieba','Despina','Erinome','Algenib','Rasalgethi','Laomedeia','Achernar','Alnilam','Schedar','Gacrux','Pulcherrima','Achird','Zubenelgenubi','Vindemiatrix','Sadachbia','Sadaltager','Sulafat'];
+const TTS_STYLES = { slow: 'speaking slowly', bright: 'high pitch, cheerful and playful' };
 const ttsHits = new Map(); let ttsDay = new Date().toDateString(), ttsG = 0;
 function ttsLimited(ip) {
   const now = Date.now(), d = new Date().toDateString();
@@ -193,56 +188,6 @@ function wavFromPcm(buf, rate) {
   h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34); h.write('data', 36); h.writeUInt32LE(buf.length, 40);
   return Buffer.concat([h, buf]);
 }
-const normVoice = v => ({ id: String(v.id || v.name || ''), name: String(v.display_name || v.displayName || v.name || v.id || ''), lang: String(v.language_code || v.languageCode || ''), accent: String(v.accent || ''), gender: String(v.gender || '').toLowerCase(), pitch: String(v.pitch || '').toLowerCase(), desc: String(v.description || '') });
-async function listVoices(params) {
-  const out = []; let token = '';
-  for (let i = 0; i < 6; i++) {
-    const q = new URLSearchParams(params || {}); if (token) q.set('pageToken', token);
-    const r = await fetch(BASE + '/v1beta/voices' + (q.toString() ? '?' + q.toString() : ''), { headers: { 'x-goog-api-key': KEY } });
-    if (!r.ok) { if (i === 0) throw new Error('voices ' + r.status); break; }
-    const j = await r.json();
-    for (const v of j.voices || []) out.push(normVoice(v));
-    token = j.nextPageToken || j.next_page_token || ''; if (!token) break;
-  }
-  return out;
-}
-const pubVoice = v => v && { id: v.id, name: v.name, gender: v.gender, pitch: v.pitch, language: v.lang, accent: v.accent, description: v.desc };
-let voiceCache = { at: 0, ttl: 0, data: null };
-async function resolveVoices() {
-  if (voiceCache.data && Date.now() - voiceCache.at < voiceCache.ttl) return voiceCache.data;
-  let data, ttl = 6 * 3600000;
-  try {
-    const seen = new Map();
-    for (const params of [{}, { search: 'child' }, { search: 'young' }, { search: 'elderly' }, { search: 'mature' }]) {
-      try { for (const v of await listVoices(params)) if (v.id && !seen.has(v.id)) seen.set(v.id, v); } catch (e) { if (!Object.keys(params).length) throw e; }
-    }
-    const all = [...seen.values()].filter(v => !v.lang || /^en/i.test(v.lang));
-    if (!all.length) throw new Error('empty catalog');
-    const T = v => v.name + ' ' + v.desc, kid = v => KW_CHILD.test(T(v)), yng = v => KW_YOUNG.test(T(v)), old = v => KW_OLD.test(T(v)), plain = v => !kid(v) && !yng(v) && !old(v);
-    const ix = (order, p) => { const i = order.indexOf(p); return i < 0 ? 99 : i; };
-    const best = (list, order, pref) => { list = list.slice().sort((a, b) => ix(order, a.pitch) - ix(order, b.pitch)); for (const n of pref) { const f = list.find(v => v.id === n || v.name === n); if (f && ix(order, f.pitch) < 99) return f; } return list[0] || null; };
-    const voices = {
-      male: best(all.filter(v => v.gender === 'male' && plain(v) && v.pitch !== 'high'), ['low', 'medium'], PREFER.male),
-      female: best(all.filter(v => v.gender === 'female' && plain(v) && v.pitch !== 'low'), ['medium', 'high'], PREFER.female),
-      young: best(all.filter(v => yng(v) && !kid(v) && !old(v) && v.pitch !== 'low'), ['medium', 'high'], PREFER.young),
-      old: best(all.filter(v => old(v) && !kid(v) && v.pitch !== 'high'), ['low', 'medium'], PREFER.old),
-      child: best(all.filter(v => kid(v) && v.pitch !== 'low'), ['high', 'medium'], PREFER.child)
-    };
-    data = { source: 'catalog', voices };
-  } catch (e) {
-    console.log('voice catalog unavailable:', e.message); ttl = 600000;
-    const voices = { child: null }; for (const k of Object.keys(BUILTIN)) voices[k] = { id: BUILTIN[k], name: BUILTIN[k], gender: '', pitch: '', lang: '', accent: '', desc: 'Not verified: the voice catalog could not be read.' };
-    data = { source: 'built-in', voices };
-  }
-  data.available = WHO.filter(k => data.voices[k]);
-  voiceCache = { at: Date.now(), ttl, data };
-  return data;
-}
-async function voicesRoute(res) {
-  if (!KEY) return send(res, 500, { error: 'not_configured' });
-  try { const d = await resolveVoices(); const voices = {}; for (const k of WHO) voices[k] = pubVoice(d.voices[k]); return send(res, 200, { source: d.source, available: d.available, voices }); }
-  catch (e) { return send(res, 502, { error: 'voices_failed' }); }
-}
 async function tts(req, res) {
   const origin = req.headers.origin;
   if (origin) { try { if (new URL(origin).host !== req.headers.host) return send(res, 403, { error: 'forbidden' }); } catch (e) { return send(res, 403, { error: 'forbidden' }); } }
@@ -252,15 +197,15 @@ async function tts(req, res) {
   const lim = ttsLimited(clientIp(req)); if (lim) return send(res, 429, { error: lim });
   let b; try { b = JSON.parse(await readBody(req)); } catch (e) { return send(res, 400, { error: 'bad_request' }); }
   const text = clip(b && b.text, 900).trim();
-  if (!text || !WHO.includes(b.who)) return send(res, 400, { error: 'bad_request' });
-  let voice; try { voice = (await resolveVoices()).voices[b.who]; } catch (e) { voice = null; }
-  if (!voice) return send(res, 400, { error: 'no_voice' });
-  const body = { model: MODEL_TTS, input: [{ type: 'user_input', content: [{ type: 'text', text }] }], response_format: { type: 'audio' }, generation_config: { speech_config: [{ voice: voice.id }] } };
+  if (!text || !TTS_VOICES.includes(b.voice) || (b.style && !TTS_STYLES[b.style])) return send(res, 400, { error: 'bad_request' });
+  const content = { type: 'text', text };
+  if (b.style) content.annotations = [{ type: 'speech_metadata', style: TTS_STYLES[b.style] }];
+  const body = { model: MODEL_TTS, input: [{ type: 'user_input', content: [content] }], response_format: { type: 'audio' }, generation_config: { speech_config: [{ voice: b.voice }] } };
   const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 60000), t0 = Date.now();
   res.on('close', () => { if (!res.writableEnded) ac.abort(); });
   try {
     const up = await fetch(BASE + '/v1beta/interactions', { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': KEY }, body: JSON.stringify(body), signal: ac.signal });
-    note('tts', MODEL_TTS + ' / ' + voice.id, up.status, Date.now() - t0);
+    note('tts', MODEL_TTS, up.status, Date.now() - t0);
     if (!up.ok) { console.log('tts upstream status', up.status, MODEL_TTS); return send(res, up.status === 429 ? 429 : 502, { error: up.status === 429 ? 'busy' : 'upstream' }); }
     const a = findAudio(await up.json());
     if (!a) return send(res, 502, { error: 'no_audio' });
@@ -268,7 +213,7 @@ async function tts(req, res) {
     if (buf.slice(0, 4).toString() !== 'RIFF') buf = wavFromPcm(buf, 24000);
     res.writeHead(200, hdr({ 'content-type': 'audio/wav', 'cache-control': 'no-store' })); res.end(buf);
   } catch (e) {
-    note('tts', MODEL_TTS + ' / ' + voice.id, 'error:' + (e && e.name), Date.now() - t0);
+    note('tts', MODEL_TTS, 'error:' + (e && e.name), Date.now() - t0);
     if (!res.headersSent) return send(res, 502, { error: 'upstream' });
     res.end();
   } finally { clearTimeout(timer); }
@@ -295,7 +240,6 @@ const server = http.createServer(async (req, res) => {
     const url = (req.url || '/').split('?')[0];
     if (req.method === 'POST' && url === '/api/chat') return await chat(req, res);
     if (req.method === 'POST' && url === '/api/tts') return await tts(req, res);
-    if (req.method === 'GET' && url === '/api/voices') return await voicesRoute(res);
     if (req.method === 'GET' && (url === '/' || url === '/index.html')) { res.writeHead(200, hdr({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })); return res.end(HTML); }
     if (req.method === 'GET' && url === '/healthz') return send(res, 200, { ok: true, configured: !!KEY, models: MODELS, last: stats });
     if (req.method === 'GET' && url === '/models') { if (!KEY) return send(res, 500, { error: 'not_configured' }); try { return send(res, 200, await listModels()); } catch (e) { return send(res, 502, { error: 'list_failed' }); } }
