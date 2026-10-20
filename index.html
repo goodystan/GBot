@@ -270,9 +270,9 @@ button:focus-visible,.item:focus-visible{outline:2px solid var(--accent);outline
 <h4>Chat</h4>
 <label class="sw"><span>Press Enter to send</span><input type="checkbox" id="s_enter"></label>
 <label class="sw"><span>Read replies aloud automatically</span><input type="checkbox" id="s_tts"></label>
-<div class="fl">Read-aloud voice<select id="s_voice"><option value="male">Male</option><option value="female">Female</option><option value="young">Young</option><option value="old">Old</option><option value="child">Child</option><option value="auto">Default</option></select></div>
+<div class="fl">Read-aloud voice<select id="s_voice"><option value="male">Male</option><option value="female">Female</option><option value="young">Young</option><option value="old">Old</option><option value="auto">Default</option></select></div>
 <div class="fl">Speaking speed<div class="vs"><input type="range" id="s_vspeed" min="0.6" max="1.6" step="0.05" value="1" aria-label="Speaking speed from slow to fast"></div><div class="vs-ends"><span>Slow</span><b id="s_vsv">Normal</b><span>Fast</span></div><div class="vbtns"><button type="button" id="s_vplay">Play</button><button type="button" id="s_vreset">Reset</button></div></div>
-<label class="sw"><span>Haptic feedback (tiny vibration on tap)</span><input type="checkbox" id="s_haptic"></label>
+
 <label class="sw"><span>AI-written chat titles</span><input type="checkbox" id="s_autotitle"></label>
 <p class="sn">Shortcuts: Ctrl or Cmd + K starts a new chat, and / jumps to the message box. You can also drag and drop files onto the page.</p>
 <h4>Saved prompts</h4>
@@ -522,16 +522,17 @@ function phoneSay(text,onend){
   if(onend){u.onend=onend;u.onerror=onend}
   speechSynthesis.speak(u);return true;
 }
-const STUDIO={male:['Charon',''],female:['Kore',''],young:['Leda',''],old:['Algenib',''],child:['Leda','bright']};
+const WHO=['male','female','young','old','child'];
+let voiceAvail=['male','female','young','old'];
 let audioEl=null,spkTok=0,studioDownUntil=0,spkBtn=null;
 function stopSpeech(){spkTok++;try{if(audioEl){audioEl.pause();audioEl.src=''}}catch(e){}audioEl=null;try{speechSynthesis.cancel()}catch(e){}}
 function splitText(t,n){const out=[];let cur='';(t.replace(/\s+/g,' ').trim().match(/[^.!?]+[.!?]*\s*/g)||[t]).forEach(s=>{s=s.trim();while(s.length>n){if(cur){out.push(cur);cur=''}out.push(s.slice(0,n));s=s.slice(n)}if(!s)return;if((cur+' '+s).trim().length>n){out.push(cur);cur=s}else cur=(cur+' '+s).trim()});if(cur)out.push(cur);return out.filter(Boolean)}
-async function ttsFetch(text,voice,style){const r=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,voice,style})});if(!r.ok)throw new Error('tts '+r.status);return await r.blob()}
+async function ttsFetch(text,who){const r=await fetch('/api/tts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text,who})});if(!r.ok)throw new Error('tts '+r.status);return await r.blob()}
 async function studioSay(text,onend){
-  const tok=++spkTok,st=STUDIO[settings.voice],voice=st[0],style=st[1];
+  const tok=++spkTok,who=settings.voice;
   const chunks=splitText(plainText(text),700).slice(0,4);
   if(!chunks.length){if(onend)onend();return}
-  const get=c=>{const p=ttsFetch(c,voice,style);p.catch(()=>{});return p};
+  const get=c=>{const p=ttsFetch(c,who);p.catch(()=>{});return p};
   let next=get(chunks[0]);
   for(let i=0;i<chunks.length;i++){
     let blob;
@@ -548,7 +549,7 @@ async function studioSay(text,onend){
   if(onend)onend();
 }
 function say(text,onend){
-  const studio=!!STUDIO[settings.voice]&&Date.now()>studioDownUntil;
+  const studio=WHO.includes(settings.voice)&&Date.now()>studioDownUntil;
   stopSpeech();
   if(studio){studioSay(text,onend);return true}
   return phoneSay(text,onend);
@@ -601,7 +602,7 @@ function closeDel(){$('delm').hidden=true;delTarget=null}
 function askDeleteFolder(f){delTarget=f;$('dtitle').textContent='Delete this folder?';$('deltxt').textContent='"'+f.name+'" will be removed. Chats inside it are kept and moved out of the folder.';$('delm').hidden=false}
 function startFolderRename(f,nm){const i=document.createElement('input');i.value=f.name;i.maxLength=40;i.style.cssText='flex:1;min-width:0;font:inherit;font-size:13px;background:var(--card);color:var(--text);border:1px solid var(--accent);border-radius:6px;padding:2px 6px';i.onclick=e=>e.stopPropagation();let done=false;const fin=ok=>{if(done)return;done=true;if(ok&&i.value.trim())f.name=i.value.trim();saveF();renderList()};i.onblur=()=>fin(true);i.onkeydown=e=>{if(e.key==='Enter')fin(true);if(e.key==='Escape')fin(false)};nm.replaceWith(i);i.focus();i.select()}
 function doDelete(){const c=delTarget;closeDel();if(!c)return;if(c.msgs===undefined){folders=folders.filter(k=>k!==c);chats.forEach(h=>{if(h.folder===c.id)h.folder=null});save();saveF();renderList();return}if(busy&&c.id===cur&&ctrl)ctrl.abort();chats=chats.filter(k=>k.id!==c.id);if(cur===c.id)cur=null;save();renderList();renderMsgs()}
-const DEF={nick:'',how:'',about:'',length:'normal',lang:'',size:'md',enter:true,tts:false,accent:'default',autotitle:false,voice:'male',vspeed:1,ucol:'soft',haptic:true};
+const DEF={nick:'',how:'',about:'',length:'normal',lang:'',size:'md',enter:true,tts:false,accent:'default',autotitle:false,voice:'male',vspeed:1,ucol:'soft'};
 let settings={...DEF};
 try{settings={...DEF,...JSON.parse(localStorage.getItem('gbot:settings')||'{}')}}catch(e){}
 if(!['male','female','young','old','child','auto'].includes(settings.voice))settings.voice='male';
@@ -621,8 +622,8 @@ function applySettings(){
 function markUser(){document.querySelectorAll('#s_ucol button').forEach(b=>b.classList.toggle('on',b.dataset.u===(settings.ucol||'soft')))}
 function markSwatch(){document.querySelectorAll('#s_accent button').forEach(b=>b.classList.toggle('on',b.dataset.c===settings.accent))}
 function saveSettings(){try{localStorage.setItem('gbot:settings',JSON.stringify(settings))}catch(e){}applySettings()}
-function fillSettings(){$('s_nick').value=settings.nick;$('s_how').value=settings.how;$('s_about').value=settings.about;$('s_len').value=settings.length;$('s_lang').value=settings.lang;$('s_size').value=settings.size;$('s_enter').checked=settings.enter;$('s_tts').checked=settings.tts;$('s_autotitle').checked=settings.autotitle;$('s_voice').value=settings.voice;$('s_vspeed').value=settings.vspeed;paintSpeed();markUser();$('s_haptic').checked=settings.haptic;markSwatch();drawPrompts()}
-function readSettings(){settings={nick:$('s_nick').value.trim(),how:$('s_how').value.trim(),about:$('s_about').value.trim(),length:$('s_len').value,lang:$('s_lang').value,size:$('s_size').value,enter:$('s_enter').checked,tts:$('s_tts').checked,accent:settings.accent,autotitle:$('s_autotitle').checked,voice:$('s_voice').value,vspeed:parseFloat($('s_vspeed').value)||1,ucol:settings.ucol,haptic:$('s_haptic').checked};saveSettings()}
+function fillSettings(){$('s_nick').value=settings.nick;$('s_how').value=settings.how;$('s_about').value=settings.about;$('s_len').value=settings.length;$('s_lang').value=settings.lang;$('s_size').value=settings.size;$('s_enter').checked=settings.enter;$('s_tts').checked=settings.tts;$('s_autotitle').checked=settings.autotitle;$('s_voice').value=settings.voice;$('s_vspeed').value=settings.vspeed;paintSpeed();markUser();markSwatch();drawPrompts()}
+function readSettings(){settings={nick:$('s_nick').value.trim(),how:$('s_how').value.trim(),about:$('s_about').value.trim(),length:$('s_len').value,lang:$('s_lang').value,size:$('s_size').value,enter:$('s_enter').checked,tts:$('s_tts').checked,accent:settings.accent,autotitle:$('s_autotitle').checked,voice:$('s_voice').value,vspeed:parseFloat($('s_vspeed').value)||1,ucol:settings.ucol};saveSettings()}
 async function autoTitle(c){
   if(!settings.autotitle||c.custom||c.titled||c.msgs.length<2)return;c.titled=true;
   try{
@@ -674,7 +675,7 @@ $('delno').onclick=closeDel;$('delyes').onclick=doDelete;$('delm').onclick=e=>{i
 $('phead').onclick=()=>{const o=$('pbody').hidden;$('pbody').hidden=!o;$('phead').setAttribute('aria-expanded',o);$('phead').classList.toggle('open',o);try{localStorage.setItem('gbot:pref',o?'1':'0')}catch(e){}};
 try{if(localStorage.getItem('gbot:pref')==='1')$('phead').click()}catch(e){}
 $('gear').onclick=()=>{fillSettings();$('setm').hidden=false;closeSide()};
-['s_nick','s_how','s_about','s_len','s_lang','s_size','s_enter','s_tts','s_autotitle','s_voice','s_vspeed','s_haptic'].forEach(id=>{$(id).addEventListener('input',readSettings);$(id).addEventListener('change',readSettings)});
+['s_nick','s_how','s_about','s_len','s_lang','s_size','s_enter','s_tts','s_autotitle','s_voice','s_vspeed'].forEach(id=>{$(id).addEventListener('input',readSettings);$(id).addEventListener('change',readSettings)});
 $('s_done').onclick=$('setx').onclick=()=>{$('setm').hidden=true};
 $('s_reset').onclick=()=>{settings={...DEF};saveSettings();fillSettings()};
 $('setm').onclick=e=>{if(e.target===$('setm'))$('setm').hidden=true};
@@ -709,13 +710,14 @@ $('speed').onclick=e=>{e.stopPropagation();closeCM();cm=document.createElement('
   document.body.appendChild(cm);const r=$('speed').getBoundingClientRect();cm.style.top=(r.bottom+6)+'px';cm.style.left=Math.max(8,Math.min(r.left,innerWidth-cm.offsetWidth-8))+'px'};
 function paintSpeed(){const r=$('s_vspeed'),v=parseFloat(r.value)||1;r.style.setProperty('--pct',((v-0.6)/1.0*100)+'%');$('s_vsv').textContent=Math.abs(v-1)<0.01?'Normal':(+v.toFixed(2))+'×'}
 $('s_vspeed').addEventListener('input',paintSpeed);
+function buildVoiceSelect(){const s=$('s_voice'),cur=settings.voice;s.innerHTML='';[['male','Male'],['female','Female'],['young','Young'],['old','Old']].concat(voiceAvail.includes('child')?[['child','Child']]:[]).concat([['auto','Default']]).forEach(([v,l])=>{const o=document.createElement('option');o.value=v;o.textContent=l;s.appendChild(o)});s.value=cur}
+fetch('/api/voices').then(r=>r.ok?r.json():null).then(j=>{if(j&&Array.isArray(j.available))voiceAvail=j.available.filter(k=>WHO.includes(k));if(!voiceAvail.includes('child')&&settings.voice==='child'){settings.voice='male';saveSettings()}buildVoiceSelect()}).catch(()=>{if(settings.voice==='child'){settings.voice='male';saveSettings()}buildVoiceSelect()});
 $('s_vplay').onclick=()=>{say("Hi, I'm GAIA. This is how I sound.")};
 $('s_vreset').onclick=()=>{$('s_vspeed').value=1;paintSpeed();readSettings()};
 if('speechSynthesis' in window){try{speechSynthesis.getVoices()}catch(e){}}
 document.addEventListener('pointerdown',e=>{
   const el=e.target.closest&&e.target.closest('button,.item,.fhead');
   if(!el||el.disabled)return;
-  if(settings.haptic&&navigator.vibrate){try{navigator.vibrate(6)}catch(x){}}
   if(getComputedStyle(el).position==='static')el.style.position='relative';
   el.style.overflow='hidden';
   const r=el.getBoundingClientRect(),d=Math.max(r.width,r.height)*2,s=document.createElement('span');
