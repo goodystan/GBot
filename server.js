@@ -248,4 +248,3 @@ const server = http.createServer(async (req, res) => {
 });
 process.on('uncaughtException', e => console.error('uncaught', e.message));
 server.listen(PORT, '0.0.0.0', () => console.log('GBot is running on port ' + PORT + (KEY ? '' : ' (GEMINI_API_KEY is missing)')));
-                                                            
