@@ -46,7 +46,7 @@ const MODES = {
   business: ' Act as a practical business and side-hustle advisor: give realistic, step-by-step, low-budget ideas.',
   language: ' Act as a friendly language tutor: help the user practise, gently correct mistakes and explain briefly.'
 };
-const LANGS = ['English', 'Nigerian Pidgin', 'Yoruba', 'Igbo', 'Hausa', 'French', 'Spanish', 'Portuguese', 'Arabic'];
+const LANGS = ['English', 'Nigerian Pidgin', 'Yoruba', 'Igbo', 'Hausa', 'French', 'Spanish', 'Portuguese', 'Arabic', 'Chinese (Mandarin)', 'Hindi', 'German', 'Russian', 'Japanese', 'Korean', 'Italian', 'Turkish', 'Indonesian', 'Bengali', 'Urdu'];
 const TITLE_SYSTEM = 'You write short conversation titles. Reply with only the title: maximum 5 words, no quotes, no ending punctuation.';
 const IMG_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 
@@ -188,6 +188,43 @@ function wavFromPcm(buf, rate) {
   h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34); h.write('data', 36); h.writeUInt32LE(buf.length, 40);
   return Buffer.concat([h, buf]);
 }
+// Speech models tried in order. If one is not available for this key, the next one is tried (and remembered once it works).
+const TTS_MODELS = (() => {
+  const infer = m => /^gemini-3\.8/.test(m) ? 'interactions' : 'generate';
+  const list = [MODEL_TTS];
+  if (process.env.TTS_FALLBACKS !== '0') for (const m of ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts', 'gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts']) if (!list.includes(m)) list.push(m);
+  return list.map(m => ({ model: m, api: infer(m) }));
+})();
+let ttsGood = null;
+function findInline(o) {
+  if (!o || typeof o !== 'object') return null;
+  const d = o.inlineData || o.inline_data;
+  if (d && typeof d.data === 'string') return { data: d.data, mimeType: d.mimeType || d.mime_type || '' };
+  let r = null;
+  for (const k of Object.keys(o)) { const v = o[k]; const f = Array.isArray(v) ? v.reduce((a, x) => findInline(x) || a, null) : findInline(v); if (f) r = f; }
+  return r;
+}
+function errText(t) {
+  let m = t; try { const j = JSON.parse(t); m = (j.error && j.error.message) || t; } catch (e) {}
+  m = String(m); if (KEY) m = m.split(KEY).join('***');
+  return m.replace(/AIza[\w-]{20,}/g, '***').slice(0, 160);
+}
+async function ttsAttempt(a, text, voice, style, signal) {
+  let url, body;
+  if (a.api === 'interactions') {
+    const content = { type: 'text', text }; if (style) content.annotations = [{ type: 'speech_metadata', style: TTS_STYLES[style] }];
+    url = BASE + '/v1beta/interactions';
+    body = { model: a.model, input: [{ type: 'user_input', content: [content] }], response_format: { type: 'audio' }, generation_config: { speech_config: [{ voice }] } };
+  } else {
+    url = BASE + '/v1beta/models/' + encodeURIComponent(a.model) + ':generateContent';
+    body = { contents: [{ parts: [{ text }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } } };
+  }
+  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': KEY }, body: JSON.stringify(body), signal });
+  if (!r.ok) return { status: r.status, msg: errText(await r.text().catch(() => '')) };
+  const j = await r.json().catch(() => null);
+  const au = findAudio(j) || findInline(j) || null;
+  return { status: 200, au };
+}
 async function tts(req, res) {
   const origin = req.headers.origin;
   if (origin) { try { if (new URL(origin).host !== req.headers.host) return send(res, 403, { error: 'forbidden' }); } catch (e) { return send(res, 403, { error: 'forbidden' }); } }
@@ -198,25 +235,24 @@ async function tts(req, res) {
   let b; try { b = JSON.parse(await readBody(req)); } catch (e) { return send(res, 400, { error: 'bad_request' }); }
   const text = clip(b && b.text, 900).trim();
   if (!text || !TTS_VOICES.includes(b.voice) || (b.style && !TTS_STYLES[b.style])) return send(res, 400, { error: 'bad_request' });
-  const content = { type: 'text', text };
-  if (b.style) content.annotations = [{ type: 'speech_metadata', style: TTS_STYLES[b.style] }];
-  const body = { model: MODEL_TTS, input: [{ type: 'user_input', content: [content] }], response_format: { type: 'audio' }, generation_config: { speech_config: [{ voice: b.voice }] } };
-  const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 60000), t0 = Date.now();
+  const order = ttsGood ? [ttsGood, ...TTS_MODELS.filter(x => x !== ttsGood)] : TTS_MODELS;
+  const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 50000), t0 = Date.now(); const tried = []; let out = null;
   res.on('close', () => { if (!res.writableEnded) ac.abort(); });
   try {
-    const up = await fetch(BASE + '/v1beta/interactions', { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': KEY }, body: JSON.stringify(body), signal: ac.signal });
-    note('tts', MODEL_TTS, up.status, Date.now() - t0);
-    if (!up.ok) { console.log('tts upstream status', up.status, MODEL_TTS); return send(res, up.status === 429 ? 429 : 502, { error: up.status === 429 ? 'busy' : 'upstream' }); }
-    const a = findAudio(await up.json());
-    if (!a) return send(res, 502, { error: 'no_audio' });
-    let buf = Buffer.from(a.data, 'base64');
-    if (buf.slice(0, 4).toString() !== 'RIFF') buf = wavFromPcm(buf, 24000);
-    res.writeHead(200, hdr({ 'content-type': 'audio/wav', 'cache-control': 'no-store' })); res.end(buf);
-  } catch (e) {
-    note('tts', MODEL_TTS, 'error:' + (e && e.name), Date.now() - t0);
-    if (!res.headersSent) return send(res, 502, { error: 'upstream' });
-    res.end();
+    for (const a of order) {
+      if (ac.signal.aborted || Date.now() - t0 > 40000) break;
+      let r;
+      try { r = await ttsAttempt(a, text, b.voice, b.style, ac.signal); } catch (e) { r = { status: 'error:' + (e && e.name), msg: '' }; }
+      let au = r.au || null;
+      if (r.status === 200 && !au) r.status = 'no audio in reply';
+      tried.push({ api: a.api, model: a.model, status: r.status, msg: r.msg || undefined });
+      if (au) { let buf = Buffer.from(au.data, 'base64'); if (buf.slice(0, 4).toString() !== 'RIFF') buf = wavFromPcm(buf, 24000); out = buf; ttsGood = a; break; }
+      if (a === ttsGood) ttsGood = null;
+    }
   } finally { clearTimeout(timer); }
+  stats.tts = { model: out ? ttsGood.model : '(none worked)', status: out ? 200 : 'failed', ms: Date.now() - t0, at: new Date().toISOString(), tried };
+  if (!out) { console.log('tts failed:', JSON.stringify(tried.map(t => t.model + ':' + t.status))); return send(res, tried.some(t => t.status === 429) ? 429 : 502, { error: tried.some(t => t.status === 429) ? 'busy' : 'upstream' }); }
+  res.writeHead(200, hdr({ 'content-type': 'audio/wav', 'cache-control': 'no-store' })); res.end(out);
 }
 
 // Lists the Gemini models this key can use (names only, never the key). Cached for 10 minutes.
